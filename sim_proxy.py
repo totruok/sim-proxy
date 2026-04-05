@@ -3,7 +3,6 @@
 
 import json
 import logging
-import os
 import re
 import signal
 import subprocess
@@ -18,12 +17,13 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 STATE_DIR = Path.home() / ".sim-proxy"
 LOG_FILE = STATE_DIR / "sim-proxy.log"
-HEARTBEAT_INTERVAL = 24 * 60 * 60  # 24 hours
 
 CONFIG = {}
 logger = logging.getLogger("sim-proxy")
 running = True
 start_time = time.time()
+device_connected = True
+telegram_update_offset = 0
 
 
 # ---------------------------------------------------------------------------
@@ -159,9 +159,13 @@ def get_sms_inbox():
     return rows
 
 
-def get_missed_calls():
+def get_call_log():
     output = adb_shell("content query --uri content://call_log/calls")
-    rows = parse_content_query(output)
+    return parse_content_query(output)
+
+
+def get_missed_calls():
+    rows = get_call_log()
     rows = [r for r in rows if r.get("type") == "3"]
     rows.sort(key=lambda r: int(r.get("_id", 0)))
     return rows
@@ -191,7 +195,7 @@ def state_file_exists(filename):
 
 
 # ---------------------------------------------------------------------------
-# Telegram
+# Telegram send
 # ---------------------------------------------------------------------------
 
 def send_telegram(text):
@@ -233,6 +237,70 @@ def telegram_send_safe(text):
 
 
 # ---------------------------------------------------------------------------
+# Telegram commands (getUpdates)
+# ---------------------------------------------------------------------------
+
+def get_telegram_updates(timeout=0):
+    global telegram_update_offset
+    url = (
+        f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/getUpdates"
+        f"?offset={telegram_update_offset}&timeout={timeout}"
+        f"&allowed_updates=%5B%22message%22%5D"
+    )
+    try:
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=timeout + 10) as resp:
+            data = json.loads(resp.read())
+        if not data.get("ok"):
+            return []
+        updates = data.get("result", [])
+        if updates:
+            telegram_update_offset = updates[-1]["update_id"] + 1
+        return updates
+    except Exception as e:
+        logger.error("getUpdates failed: %s", e)
+        return []
+
+
+def process_commands(timeout=0):
+    updates = get_telegram_updates(timeout=timeout)
+    for update in updates:
+        message = update.get("message", {})
+        text = message.get("text", "")
+        chat_id = str(message.get("chat", {}).get("id", ""))
+        if chat_id != CONFIG["TELEGRAM_CHAT_ID"]:
+            continue
+        if not text.startswith("/"):
+            continue
+        parts = text.split(maxsplit=1)
+        cmd = parts[0].split("@")[0].lower()
+        args = parts[1] if len(parts) > 1 else ""
+        logger.info("Command: %s %s", cmd, args)
+        try:
+            handle_command(cmd, args)
+        except Exception as e:
+            logger.exception("Command handler error: %s", e)
+            telegram_send_safe(f"Ошибка: {e}")
+
+
+def handle_command(cmd, args):
+    handlers = {
+        "/status": lambda: handle_status(),
+        "/sms": lambda: handle_sms(args),
+        "/reboot": lambda: handle_reboot(),
+        "/ussd": lambda: handle_ussd(args),
+        "/calls": lambda: handle_calls(args),
+        "/inbox": lambda: handle_inbox(args),
+        "/help": lambda: handle_help(),
+    }
+    handler = handlers.get(cmd)
+    if handler:
+        handler()
+    else:
+        send_telegram(f"Неизвестная команда: {cmd}\nИспользуй /help")
+
+
+# ---------------------------------------------------------------------------
 # Formatting
 # ---------------------------------------------------------------------------
 
@@ -244,23 +312,35 @@ def format_timestamp(ms):
         return "unknown"
 
 
+def format_uptime():
+    elapsed = int(time.time() - start_time)
+    days = elapsed // 86400
+    hours = (elapsed % 86400) // 3600
+    mins = (elapsed % 3600) // 60
+    if days > 0:
+        return f"{days}д {hours}ч"
+    if hours > 0:
+        return f"{hours}ч {mins}м"
+    return f"{mins}м"
+
+
 def format_sms(record):
     address = record.get("address", "unknown")
     body = record.get("body", "")
     date = record.get("date", "0")
     ts = format_timestamp(date)
-    return f"\U0001f4e9 SMS \u043e\u0442 {address}\n{body}\n\U0001f550 {ts}"
+    return f"\U0001f4e9 SMS от {address}\n{body}\n\U0001f550 {ts}"
 
 
 def format_missed_call(record):
     number = record.get("number", "unknown")
     date = record.get("date", "0")
     ts = format_timestamp(date)
-    return f"\U0001f4de \u041f\u0440\u043e\u043f\u0443\u0449\u0435\u043d\u043d\u044b\u0439 \u0437\u0432\u043e\u043d\u043e\u043a \u043e\u0442 {number}\n\U0001f550 {ts}"
+    return f"\U0001f4de Пропущенный звонок от {number}\n\U0001f550 {ts}"
 
 
 # ---------------------------------------------------------------------------
-# Device info & health
+# Device info
 # ---------------------------------------------------------------------------
 
 def get_device_info():
@@ -283,40 +363,256 @@ def get_device_info():
         info["signal"] = adb_cmd(["shell", "getprop", "gsm.network.type"]).strip()
     except Exception:
         info["signal"] = "unknown"
+    try:
+        reg = adb_cmd(["shell", "dumpsys", "telephony.registry"])
+        m = re.search(r"primary=(CellSignalStrength(\w+))", reg)
+        if m:
+            primary_type = m.group(2)  # e.g. "Lte", "Nr"
+            pattern = rf"m{primary_type}=.*?rsrp=(-?\d+)"
+            rm = re.search(pattern, reg)
+            if rm:
+                rsrp = int(rm.group(1))
+                if rsrp >= -85:
+                    quality = "отличный"
+                elif rsrp >= -95:
+                    quality = "хороший"
+                elif rsrp >= -105:
+                    quality = "нормальный"
+                elif rsrp >= -115:
+                    quality = "слабый"
+                else:
+                    quality = "очень слабый"
+                info["signal_level"] = f"{rsrp} dBm, {quality}"
+            else:
+                info["signal_level"] = None
+        else:
+            info["signal_level"] = None
+    except Exception:
+        info["signal_level"] = None
     return info
+
+
+def get_sim_number():
+    # Method 1: dumpsys iphonesubinfo (rooted)
+    try:
+        output = adb_shell("dumpsys iphonesubinfo")
+        m = re.search(r"Phone Number\s*=\s*(\+?\d+)", output, re.IGNORECASE)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    # Method 2: telephony/siminfo content provider
+    try:
+        output = adb_shell("content query --uri content://telephony/siminfo")
+        rows = parse_content_query(output)
+        for row in rows:
+            number = row.get("number", "")
+            if number and number != "NULL" and number.strip():
+                return number
+    except Exception:
+        pass
+    # Method 3: getprop
+    try:
+        output = adb_cmd(["shell", "getprop", "gsm.sim.operator.numeric"]).strip()
+        if output:
+            return output
+    except Exception:
+        pass
+    return "unknown"
 
 
 def send_health_check():
     info = get_device_info()
+    number = get_sim_number()
+    sig = info["signal"]
+    if info.get("signal_level") is not None:
+        sig += f" ({info['signal_level']})"
     text = (
-        "\u2705 sim-proxy \u0437\u0430\u043f\u0443\u0449\u0435\u043d\n"
-        f"\U0001f4f1 \u0423\u0441\u0442\u0440\u043e\u0439\u0441\u0442\u0432\u043e: {info['model']}\n"
-        f"\U0001f50b \u0411\u0430\u0442\u0430\u0440\u0435\u044f: {info['battery']}%\n"
-        f"\U0001f4f6 \u041e\u043f\u0435\u0440\u0430\u0442\u043e\u0440: {info['operator']}\n"
-        f"\U0001f4e1 \u0421\u0438\u0433\u043d\u0430\u043b: {info['signal']}"
+        "\u2705 sim-proxy запущен\n"
+        f"\U0001f4f1 Устройство: {info['model']}\n"
+        f"\U0001f4de Номер: {number}\n"
+        f"\U0001f50b Батарея: {info['battery']}%\n"
+        f"\U0001f4f6 Оператор: {info['operator']}\n"
+        f"\U0001f4e1 Сигнал: {sig}"
     )
     telegram_send_safe(text)
     logger.info("Health check sent")
 
 
-def format_uptime():
-    elapsed = int(time.time() - start_time)
-    days = elapsed // 86400
-    hours = (elapsed % 86400) // 3600
-    if days > 0:
-        return f"{days}\u0434 {hours}\u0447"
-    return f"{hours}\u0447"
+# ---------------------------------------------------------------------------
+# Command handlers
+# ---------------------------------------------------------------------------
 
-
-def send_heartbeat():
+def handle_status():
+    if not check_device_connected():
+        send_telegram("\u26a0\ufe0f Телефон не подключён")
+        return
     info = get_device_info()
+    number = get_sim_number()
+    uptime = format_uptime()
+    sig = info["signal"]
+    if info.get("signal_level") is not None:
+        sig += f" ({info['signal_level']})"
     text = (
-        "\U0001f493 sim-proxy \u0436\u0438\u0432\n"
-        f"\U0001f50b \u0411\u0430\u0442\u0430\u0440\u0435\u044f: {info['battery']}%\n"
-        f"\u23f1 Uptime: {format_uptime()}"
+        f"\U0001f4ca Статус\n"
+        f"\U0001f4f1 {info['model']}\n"
+        f"\U0001f4de Номер: {number}\n"
+        f"\U0001f50b Батарея: {info['battery']}%\n"
+        f"\U0001f4f6 Оператор: {info['operator']}\n"
+        f"\U0001f4e1 Сигнал: {sig}\n"
+        f"\u23f1 Uptime: {uptime}"
     )
-    telegram_send_safe(text)
-    logger.info("Heartbeat sent")
+    send_telegram(text)
+
+
+def handle_sms(args):
+    if not check_device_connected():
+        send_telegram("\u26a0\ufe0f Телефон не подключён")
+        return
+    parts = args.split(maxsplit=1)
+    if len(parts) < 2:
+        send_telegram("Формат: /sms +7XXXXXXXXXX текст сообщения")
+        return
+    number, text = parts
+    try:
+        escaped = text.replace('"', '\\"')
+        cmd = (
+            f'service call isms 7 i32 0 s16 "com.android.mms" '
+            f's16 "{number}" s16 "null" s16 "{escaped}" '
+            f's16 "null" s16 "null" i32 0'
+        )
+        result = adb_shell(cmd)
+        if "error" in result.lower() or "exception" in result.lower():
+            send_telegram(f"\u274c Ошибка отправки: {result.strip()}")
+        else:
+            send_telegram(f"\u2705 SMS отправлено на {number}")
+    except Exception as e:
+        send_telegram(f"\u274c Ошибка отправки SMS: {e}")
+
+
+def handle_reboot():
+    if not check_device_connected():
+        send_telegram("\u26a0\ufe0f Телефон не подключён")
+        return
+    send_telegram("\U0001f504 Перезагрузка телефона...")
+    try:
+        adb_cmd(["reboot"])
+    except Exception as e:
+        send_telegram(f"\u274c Ошибка: {e}")
+
+
+def handle_ussd(code):
+    if not check_device_connected():
+        send_telegram("\u26a0\ufe0f Телефон не подключён")
+        return
+    code = code.strip()
+    if not code:
+        send_telegram("Формат: /ussd *100#")
+        return
+    try:
+        # Clear logcat before sending
+        adb_cmd(["logcat", "-c"])
+        # Send USSD via intent
+        encoded = code.replace("#", "%23")
+        adb_cmd([
+            "shell", "am", "start",
+            "-a", "android.intent.action.CALL",
+            "-d", f"tel:{encoded}",
+        ])
+        send_telegram(f"\U0001f4e1 USSD {code} отправлен, жду ответ...")
+        time.sleep(7)
+        # Try to capture response from logcat
+        output = adb_cmd(["logcat", "-d", "-t", "100"])
+        response = None
+        for line in output.splitlines():
+            lower = line.lower()
+            if "ussd" in lower or "mmi" in lower:
+                m = re.search(
+                    r"(?:response|message|text|result)[=: ]+(.+)",
+                    line, re.IGNORECASE,
+                )
+                if m:
+                    response = m.group(1).strip()
+                    break
+        if response:
+            send_telegram(f"\U0001f4e1 USSD ответ:\n{response}")
+        else:
+            send_telegram(
+                "\u26a0\ufe0f Не удалось захватить ответ USSD автоматически.\n"
+                "Проверь экран телефона."
+            )
+    except Exception as e:
+        send_telegram(f"\u274c Ошибка USSD: {e}")
+
+
+def handle_calls(args):
+    if not check_device_connected():
+        send_telegram("\u26a0\ufe0f Телефон не подключён")
+        return
+    n = 5
+    args = args.strip()
+    if args.isdigit():
+        n = int(args)
+    try:
+        rows = get_call_log()
+        rows.sort(key=lambda r: int(r.get("_id", 0)), reverse=True)
+        rows = rows[:n]
+        if not rows:
+            send_telegram("Журнал звонков пуст")
+            return
+        call_types = {
+            "1": "\U0001f4f2 Входящий",
+            "2": "\U0001f4f1 Исходящий",
+            "3": "\U0001f4f5 Пропущенный",
+        }
+        lines = [f"\U0001f4de Последние {len(rows)} звонков:"]
+        for r in rows:
+            ct = call_types.get(r.get("type", ""), f"? ({r.get('type', '?')})")
+            number = r.get("number", "?")
+            ts = format_timestamp(r.get("date", "0"))
+            duration = r.get("duration", "0")
+            lines.append(f"\n{ct} {number}\n\U0001f550 {ts} ({duration}с)")
+        send_telegram("\n".join(lines))
+    except Exception as e:
+        send_telegram(f"\u274c Ошибка: {e}")
+
+
+def handle_inbox(args):
+    if not check_device_connected():
+        send_telegram("\u26a0\ufe0f Телефон не подключён")
+        return
+    n = 5
+    args = args.strip()
+    if args.isdigit():
+        n = int(args)
+    try:
+        rows = get_sms_inbox()
+        rows.sort(key=lambda r: int(r.get("_id", 0)), reverse=True)
+        rows = rows[:n]
+        if not rows:
+            send_telegram("Входящие пусто")
+            return
+        lines = [f"\U0001f4e9 Последние {len(rows)} SMS:"]
+        for r in rows:
+            address = r.get("address", "?")
+            body = r.get("body", "")
+            ts = format_timestamp(r.get("date", "0"))
+            lines.append(f"\n{address} ({ts}):\n{body}")
+        send_telegram("\n".join(lines))
+    except Exception as e:
+        send_telegram(f"\u274c Ошибка: {e}")
+
+
+def handle_help():
+    send_telegram(
+        "\U0001f4cb Команды:\n"
+        "/status — статус телефона\n"
+        "/sms +7XXX текст — отправить SMS\n"
+        "/inbox [N] — последние N SMS (по умолчанию 5)\n"
+        "/calls [N] — последние N звонков (по умолчанию 5)\n"
+        "/ussd *100# — USSD запрос\n"
+        "/reboot — перезагрузить телефон"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -382,11 +678,21 @@ def poll_once():
 # ---------------------------------------------------------------------------
 
 def main_loop():
-    device_connected = True
+    global device_connected
     last_contact_time = time.time()
-    last_heartbeat = time.time()
+    next_device_check = 0
 
     while running:
+        # Process Telegram commands (long poll doubles as sleep)
+        try:
+            process_commands(timeout=CONFIG["POLL_INTERVAL"])
+        except Exception as e:
+            logger.error("Command processing error: %s", e)
+
+        now = time.time()
+        if now < next_device_check:
+            continue
+
         connected_now = check_device_connected()
 
         if connected_now:
@@ -395,7 +701,8 @@ def main_loop():
                 send_health_check()
                 device_connected = True
 
-            last_contact_time = time.time()
+            last_contact_time = now
+            next_device_check = now
 
             try:
                 poll_once()
@@ -403,25 +710,18 @@ def main_loop():
                 logger.warning("ADB command timed out")
             except Exception as e:
                 logger.exception("Poll error: %s", e)
-
-            now = time.time()
-            if now - last_heartbeat >= HEARTBEAT_INTERVAL:
-                send_heartbeat()
-                last_heartbeat = now
-
-            time.sleep(CONFIG["POLL_INTERVAL"])
         else:
             if device_connected:
                 logger.warning("Device disconnected")
                 ts = datetime.fromtimestamp(last_contact_time).strftime("%Y-%m-%d %H:%M")
                 alert = (
-                    "\U0001f6a8 \u0422\u0435\u043b\u0435\u0444\u043e\u043d \u043d\u0435 \u043e\u0442\u0432\u0435\u0447\u0430\u0435\u0442!\n"
-                    f"\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0439 \u043a\u043e\u043d\u0442\u0430\u043a\u0442: {ts}"
+                    "\U0001f6a8 Телефон не отвечает!\n"
+                    f"Последний контакт: {ts}"
                 )
                 telegram_send_safe(alert)
                 device_connected = False
 
-            time.sleep(60)
+            next_device_check = now + 60
 
     logger.info("Shutting down")
 
@@ -437,7 +737,7 @@ def shutdown_handler(signum, _frame):
 
 
 def main():
-    global CONFIG, start_time
+    global CONFIG, start_time, device_connected
 
     CONFIG = load_config()
     setup_logging()
@@ -447,13 +747,14 @@ def main():
     signal.signal(signal.SIGINT, shutdown_handler)
 
     logger.info("sim-proxy starting")
-
     STATE_DIR.mkdir(parents=True, exist_ok=True)
 
     if check_device_connected():
+        device_connected = True
         init_state_if_needed()
         send_health_check()
     else:
+        device_connected = False
         logger.warning("Device not connected at startup")
 
     main_loop()
