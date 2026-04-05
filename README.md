@@ -1,0 +1,77 @@
+# sim-proxy
+
+Скрипт для Mac/Linux: мониторит рутированный Android-телефон через ADB и пересылает SMS и пропущенные звонки в Telegram.
+
+## Возможности
+
+- Пересылка входящих SMS в Telegram
+- Уведомления о пропущенных звонках
+- Health check при запуске (модель, батарея, оператор, сигнал)
+- Heartbeat каждые 24 часа
+- Алерт при отключении телефона
+- Автоматический перезапуск через LaunchAgent (macOS) или systemd (Linux)
+
+## Требования
+
+- Python 3.6+
+- ADB (Android SDK platform-tools)
+- Рутированный Android-телефон (Magisk) с USB-отладкой
+- Telegram-бот (создать через [@BotFather](https://t.me/BotFather))
+
+## Установка
+
+```bash
+git clone <repo-url> && cd sim-proxy
+./install.sh
+```
+
+Скрипт `install.sh`:
+1. Проверит наличие ADB и Python
+2. Проверит подключение телефона
+3. Запросит Telegram Bot Token и Chat ID
+4. Отправит тестовое сообщение в Telegram
+5. Настроит автозапуск
+
+## Ручной запуск
+
+```bash
+cp .env.example .env
+# Заполнить .env
+python3 sim_proxy.py
+```
+
+## Управление
+
+### macOS
+
+```bash
+# Остановить
+launchctl unload ~/Library/LaunchAgents/com.sim-proxy.plist
+
+# Запустить
+launchctl load ~/Library/LaunchAgents/com.sim-proxy.plist
+```
+
+### Linux
+
+```bash
+systemctl --user status sim-proxy
+systemctl --user stop sim-proxy
+systemctl --user start sim-proxy
+journalctl --user -u sim-proxy -f
+```
+
+## Логи
+
+```bash
+tail -f ~/.sim-proxy/sim-proxy.log
+```
+
+## Конфигурация (.env)
+
+| Переменная | Описание | Обязательная |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | Токен бота от @BotFather | Да |
+| `TELEGRAM_CHAT_ID` | ID чата для уведомлений | Да |
+| `ADB_DEVICE_SERIAL` | Серийный номер устройства (если несколько) | Нет |
+| `POLL_INTERVAL` | Интервал опроса в секундах (по умолчанию 30) | Нет |

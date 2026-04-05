@@ -1,0 +1,1 @@
+# sim-proxy: no external dependencies (stdlib only)
