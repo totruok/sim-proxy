@@ -4,10 +4,11 @@
 
 ## Возможности
 
-- Пересылка входящих SMS в Telegram
+- Пересылка входящих SMS в Telegram (полный текст, включая многострочные)
 - Уведомления о пропущенных звонках
-- Health check при запуске (модель, номер SIM, батарея, оператор, сигнал)
-- Алерт при отключении телефона
+- Отправка SMS через Telegram-команду (через Google Messages, headless)
+- Health check при запуске (модель, номер SIM, батарея, оператор, сигнал dBm)
+- Алерт при отключении телефона, ошибки скрипта в Telegram
 - Автоматический перезапуск через LaunchAgent (macOS) или systemd (Linux)
 
 ## Telegram-команды
@@ -27,6 +28,7 @@
 - Python 3.6+
 - ADB (Android SDK platform-tools)
 - Рутированный Android-телефон (Magisk) с USB-отладкой
+- Google Messages как SMS-приложение по умолчанию (для отправки SMS через `/sms`)
 - Telegram-бот (создать через [@BotFather](https://t.me/BotFather))
 
 ## Установка

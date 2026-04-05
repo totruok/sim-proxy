@@ -60,6 +60,19 @@ def load_config():
 # Logging
 # ---------------------------------------------------------------------------
 
+class TelegramLogHandler(logging.Handler):
+    """Send ERROR+ log messages to Telegram."""
+
+    def emit(self, record):
+        try:
+            text = f"\u26a0\ufe0f sim-proxy {record.levelname}\n{record.getMessage()}"
+            if len(text) > 4000:
+                text = text[:4000] + "..."
+            send_telegram_curl(text)
+        except Exception:
+            pass
+
+
 def setup_logging():
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     logger.setLevel(logging.DEBUG)
@@ -76,6 +89,10 @@ def setup_logging():
 
     logger.addHandler(fh)
     logger.addHandler(sh)
+
+    th = TelegramLogHandler()
+    th.setLevel(logging.ERROR)
+    logger.addHandler(th)
 
 
 # ---------------------------------------------------------------------------
@@ -124,9 +141,16 @@ def check_device_connected():
 
 def parse_content_query(output):
     rows = []
-    for line in output.strip().splitlines():
-        line = line.strip()
-        m = re.match(r"^Row:\s+\d+\s+(.*)", line)
+    # Join continuation lines (body can contain newlines)
+    raw_lines = output.strip().splitlines()
+    lines = []
+    for raw in raw_lines:
+        if re.match(r"^Row:\s+\d+\s+", raw):
+            lines.append(raw)
+        elif lines:
+            lines[-1] += "\n" + raw
+    for line in lines:
+        m = re.match(r"^Row:\s+\d+\s+(.*)", line, re.DOTALL)
         if not m:
             continue
         rest = m.group(1)
@@ -465,6 +489,33 @@ def handle_status():
     send_telegram(text)
 
 
+SMS_HELPER = "/data/local/tmp/sim-proxy-sendsms.sh"
+
+
+def ensure_sms_helper():
+    """Deploy SMS sender script to the device (avoids ADB quoting issues)."""
+    script = (
+        '#!/system/bin/sh\n'
+        'NUMBER="$1"\n'
+        'shift\n'
+        'TEXT="$*"\n'
+        'am startservice'
+        ' -a android.intent.action.RESPOND_VIA_MESSAGE'
+        ' -d "smsto:$NUMBER"'
+        ' --es android.intent.extra.TEXT "$TEXT"'
+        ' -n com.google.android.apps.messaging/.shared.NoConfirmationSmsSendService\n'
+    )
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
+        f.write(script)
+        tmp = f.name
+    try:
+        adb_cmd(["push", tmp, SMS_HELPER])
+        adb_shell(f"chmod 755 {SMS_HELPER}")
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+
+
 def handle_sms(args):
     if not check_device_connected():
         send_telegram("\u26a0\ufe0f Телефон не подключён")
@@ -475,14 +526,8 @@ def handle_sms(args):
         return
     number, text = parts
     try:
-        escaped = text.replace('"', '\\"')
-        cmd = (
-            f'service call isms 7 i32 0 s16 "com.android.mms" '
-            f's16 "{number}" s16 "null" s16 "{escaped}" '
-            f's16 "null" s16 "null" i32 0'
-        )
-        result = adb_shell(cmd)
-        if "error" in result.lower() or "exception" in result.lower():
+        result = adb_shell(f"{SMS_HELPER} {number} {text}")
+        if "error" in result.lower():
             send_telegram(f"\u274c Ошибка отправки: {result.strip()}")
         else:
             send_telegram(f"\u2705 SMS отправлено на {number}")
@@ -752,6 +797,7 @@ def main():
     if check_device_connected():
         device_connected = True
         init_state_if_needed()
+        ensure_sms_helper()
         send_health_check()
     else:
         device_connected = False
