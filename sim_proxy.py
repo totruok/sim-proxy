@@ -63,7 +63,12 @@ def load_config():
 class TelegramLogHandler(logging.Handler):
     """Send ERROR+ log messages to Telegram."""
 
+    _sending = False
+
     def emit(self, record):
+        if self._sending:
+            return
+        self._sending = True
         try:
             text = f"\u26a0\ufe0f sim-proxy {record.levelname}\n{record.getMessage()}"
             if len(text) > 4000:
@@ -71,6 +76,8 @@ class TelegramLogHandler(logging.Handler):
             send_telegram_curl(text)
         except Exception:
             pass
+        finally:
+            self._sending = False
 
 
 def setup_logging():
