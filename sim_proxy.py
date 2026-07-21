@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -24,6 +25,7 @@ running = True
 start_time = time.time()
 device_connected = True
 telegram_update_offset = 0
+telegram_poll_failures = 0
 
 
 # ---------------------------------------------------------------------------
@@ -271,8 +273,15 @@ def telegram_send_safe(text):
 # Telegram commands (getUpdates)
 # ---------------------------------------------------------------------------
 
+# How many getUpdates calls must fail back-to-back before we treat polling
+# as genuinely broken (vs. a one-off long-poll timeout) and alert Telegram.
+# Each failed long-poll takes up to ~POLL_INTERVAL+10s, so 5 in a row is
+# roughly 3 minutes of the bot being deaf to commands.
+TELEGRAM_FAIL_THRESHOLD = 5
+
+
 def get_telegram_updates(timeout=0):
-    global telegram_update_offset
+    global telegram_update_offset, telegram_poll_failures
     url = (
         f"https://api.telegram.org/bot{CONFIG['TELEGRAM_BOT_TOKEN']}/getUpdates"
         f"?offset={telegram_update_offset}&timeout={timeout}"
@@ -283,13 +292,43 @@ def get_telegram_updates(timeout=0):
         with urllib.request.urlopen(req, timeout=timeout + 10) as resp:
             data = json.loads(resp.read())
         if not data.get("ok"):
-            return []
+            # API-level rejection (e.g. bad token) — count it as a failure.
+            raise RuntimeError(data.get("description", "getUpdates returned ok=false"))
+        if telegram_poll_failures >= TELEGRAM_FAIL_THRESHOLD:
+            telegram_send_safe(
+                "✅ sim-proxy: связь с Telegram восстановлена "
+                f"(после {telegram_poll_failures} неудачных опросов)"
+            )
+        telegram_poll_failures = 0
         updates = data.get("result", [])
         if updates:
             telegram_update_offset = updates[-1]["update_id"] + 1
         return updates
     except Exception as e:
-        logger.error("getUpdates failed: %s", e)
+        telegram_poll_failures += 1
+        if telegram_poll_failures < TELEGRAM_FAIL_THRESHOLD:
+            # A single blip is the normal long-poll outcome on a flaky link.
+            # Keep it in the log file only — never spam the chat for these.
+            benign = isinstance(e, (socket.timeout, TimeoutError)) or (
+                isinstance(e, urllib.error.URLError)
+                and isinstance(getattr(e, "reason", None), (socket.timeout, TimeoutError))
+            )
+            logger.log(
+                logging.DEBUG if benign else logging.WARNING,
+                "getUpdates failed (%d in a row): %s", telegram_poll_failures, e,
+            )
+        elif telegram_poll_failures == TELEGRAM_FAIL_THRESHOLD:
+            # Now persistent: the bot can't receive commands. Surface it once.
+            logger.error(
+                "getUpdates failing repeatedly (%d in a row) — команды недоступны: %s",
+                telegram_poll_failures, e,
+            )
+        else:
+            # Already alerted; stay quiet in the log until it recovers.
+            logger.warning(
+                "getUpdates still failing (%d in a row): %s",
+                telegram_poll_failures, e,
+            )
         return []
 
 
