@@ -2,6 +2,11 @@
 
 Скрипт для Mac/Linux: мониторит рутированный Android-телефон через ADB и пересылает SMS и пропущенные звонки в Telegram. Управление телефоном через Telegram-команды.
 
+## Документация
+
+- [docs/android-setup.md](docs/android-setup.md) — подготовка нового телефона: bootloader, Magisk, автовключение при подаче питания, тишина, лимит батареи
+- [docs/server-setup.md](docs/server-setup.md) — настройка сервера: adb и udev, Telegram-бот, прокси при блокировке api.telegram.org, чеклист проверки, uhubctl
+
 ## Возможности
 
 - Пересылка входящих SMS в Telegram (полный текст, включая многострочные)
