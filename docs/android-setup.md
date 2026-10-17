@@ -179,6 +179,47 @@ but a message from a person whose phone supports RCS would silently go
 missing. With RCS on, `/sms` to such a person may also go out as RCS and is
 then reported as not confirmed.
 
+After it is turned off, Google can take a few days to deregister the number,
+so a few messages may still arrive as RCS in that time.
+
+**Remotely, over adb**, when the phone is already on its shelf: open the
+settings screen of Google Messages directly and tap through it. `tap` finds
+an element by its exact text in the screen layout and taps its centre.
+
+```bash
+tap() {  # tap the element whose text is exactly $1
+  b=$(adb exec-out uiautomator dump /dev/tty | tr '>' '\n' | grep -F "text=\"$1\"" \
+      | grep -o '\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]' | head -1)
+  [ -n "$b" ] || { echo "not on screen: $1"; return 1; }
+  set -- $(echo "$b" | tr '[],' '   ')
+  adb shell input tap $(( ($1 + $3) / 2 )) $(( ($2 + $4) / 2 ))
+}
+
+adb shell settings put system screen_off_timeout 300000   # keep the screen on meanwhile
+adb shell input keyevent KEYCODE_WAKEUP
+adb shell wm dismiss-keyguard
+adb shell am start -n com.google.android.apps.messaging/.ui.appsettings.ApplicationSettingsActivity
+tap "RCS chats"
+tap "Turn on RCS chats"      # the switch; Messages asks for confirmation
+tap "Turn Off"
+
+# Check: the first switch on the screen must say checked="false"
+adb exec-out uiautomator dump /dev/tty | tr '>' '\n' | grep -m1 switchWidget | grep -o 'checked="[a-z]*"'
+
+adb shell input keyevent KEYCODE_HOME
+adb shell settings put system screen_off_timeout 10000    # back to the value from "Turn off what is not needed"
+adb shell input keyevent KEYCODE_SLEEP
+```
+
+Run the lines one at a time, a second or two apart, so each screen has
+opened before the next tap. To see the screen at any point:
+`adb exec-out screencap -p > screen.png`. The texts are those of the English
+interface; with another system language, use the labels shown on the
+screenshot. If `am start` fails after an update of Messages, open Messages
+and go through your profile picture → Messages settings → General → RCS
+chats. In a script, add `</dev/null` to each `adb shell` line: otherwise the
+first one reads the rest of the script from standard input.
+
 ### No screen lock and no SIM PIN
 
 Each of them stops the phone from recovering on its own:
