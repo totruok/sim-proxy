@@ -21,14 +21,14 @@ only know that number.
   <img alt="SMS and missed calls go from the Android phone over USB to the server running sim_proxy.py, then over HTTPS to the Telegram Bot API and your chat. Commands such as /sms, /status and /inbox travel back the same way." src="docs/images/how-it-works-wide-light.svg">
 </picture>
 
-- Every `POLL_INTERVAL` seconds sim-proxy reads the SMS inbox and the call
-  log with `adb shell su -c 'content query ...'`.
-- It remembers the id of the last forwarded SMS and missed call in
-  `~/.sim-proxy/`. The id moves forward only after Telegram has accepted the
-  message, so if the server, the phone or the network goes down, nothing is
-  lost: once everything is back, every SMS newer than that id is sent.
-- On the very first start it records the current newest id and does not
-  flood you with old messages.
+- Every `POLL_INTERVAL` seconds sim-proxy asks the phone for new SMS and
+  missed calls with `adb shell su -c 'content query ...'`.
+- It remembers how far it has forwarded in `~/.sim-proxy/state.json`, and
+  moves that mark only after Telegram has accepted the message. If the
+  server, the phone or the network goes down, nothing is lost: once
+  everything is back, whatever arrived meanwhile is sent.
+- On the very first start it marks everything already on the phone as seen
+  and does not flood you with old messages.
 - Commands are accepted only from the chat in `TELEGRAM_CHAT_ID`. Messages
   from anyone else are ignored without a reply.
 
@@ -36,27 +36,33 @@ More detail: [docs/how-it-works.md](docs/how-it-works.md).
 
 ## Features
 
-- Incoming SMS forwarded in full, including multi-line messages
-- Missed call notifications
-- Send an SMS from Telegram (`/sms`), through Google Messages, without
-  touching the phone
+- Incoming SMS forwarded in full, including multi-line and very long
+  messages
+- Missed call notifications, including withheld numbers
+- Send an SMS from Telegram (`/sms`) through Google Messages and get told
+  whether it was actually sent
+- USSD requests (`/ussd`) with the reply read from the phone's screen
 - Health check on start and after the phone reconnects: model, SIM number,
-  battery, operator, signal in dBm
-- Alert when the phone stops responding; error log lines are sent to the
-  chat as well
+  battery, operator, signal in dBm, whether SMS can be read
+- Alerts when the phone is gone or cannot be read, sent once per problem,
+  with a message when it recovers
 - Runs as a LaunchAgent (macOS) or a systemd user service (Linux) and
   restarts on failure
 - Python standard library only, no dependencies
+
+Only SMS are forwarded. RCS chats and MMS are stored elsewhere on the phone
+and never reach sim-proxy, so the phone guide turns RCS off. Codes from banks
+and services are plain SMS.
 
 ## Telegram commands
 
 | Command | What it does |
 |---|---|
-| `/status` | Model, SIM number, battery, operator, signal, uptime |
-| `/sms +447700900123 text` | Send an SMS from the phone |
-| `/inbox [N]` | Last N SMS (default 5) |
-| `/calls [N]` | Last N calls (default 5) |
-| `/ussd *100#` | Send a USSD request and try to capture the reply |
+| `/status` | Model, SIM number, battery, operator, signal, phone uptime |
+| `/sms +447700900123 text` | Send an SMS from the phone and report whether it went out |
+| `/inbox [N]` | Last N SMS (default 5, up to 20) |
+| `/calls [N]` | Last N calls (default 5, up to 20) |
+| `/ussd *100#` | Send a USSD request and return the reply shown on the phone |
 | `/reboot` | Reboot the phone |
 | `/help` | List of commands |
 
@@ -96,9 +102,11 @@ More detail: [docs/how-it-works.md](docs/how-it-works.md).
    ./install.sh
    ```
 
-   `install.sh` checks for `adb`, `python3` and a connected phone, asks for
-   the bot token, chat id, device serial and poll interval, writes `.env`,
-   sends a test message to Telegram, then installs and starts the service.
+   `install.sh` checks for `adb`, `python3`, `curl`, a connected phone and
+   root, asks for the bot token, chat id, device serial and poll interval,
+   writes `.env`, sends a test message to Telegram, then installs and starts
+   the service. Press **Start** in the chat with your bot before running it:
+   a bot cannot write to you until you do.
 
 4. **Check it end to end:** you should get a health check message, `/status`
    should answer, and a real SMS sent to the SIM should arrive in the chat.
@@ -113,7 +121,8 @@ More detail: [docs/how-it-works.md](docs/how-it-works.md).
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather | yes |
 | `TELEGRAM_CHAT_ID` | The only chat that receives messages and may send commands | yes |
 | `ADB_DEVICE_SERIAL` | Serial from `adb devices`, needed only if several phones are connected | no |
-| `POLL_INTERVAL` | Seconds between checks, default 30. For 2FA codes use 5 to 10 | no |
+| `POLL_INTERVAL` | Seconds between checks of the phone, 2 to 300, default 10. A whole number outside that range is moved to the nearest end; anything else means 10. Either way you get a warning in the chat | no |
+| `TELEGRAM_PROXY` | HTTP proxy for Telegram, for example `http://127.0.0.1:10809`, where api.telegram.org is blocked | no |
 
 ## Managing the service
 
@@ -149,7 +158,10 @@ Read this before you point a SIM that receives 2FA codes at it.
   after a power cut. Anyone who can touch it owns it and the SIM, so keep it
   somewhere physically safe.
 - **The server controls the phone.** The adb key in `~/.android/adbkey` gives
-  root on the phone to anyone with a shell on the server.
+  root on the phone to anyone with a shell on the server, and the adb server
+  listens on `localhost:5037` without a password, so any program running on
+  the server can use it too. Do not share the server with people you would
+  not give the SIM to.
 - **SMS text goes through Telegram's servers.** Bot chats are not end-to-end
   encrypted.
 - sim-proxy only makes outgoing HTTPS requests. It opens no ports.
@@ -161,11 +173,13 @@ Read this before you point a SIM that receives 2FA codes at it.
   bot for each phone.
 - **macOS: `protocol fault (couldn't read status)` or `daemon not running`
   errors:** the adb server is crashing. `install.sh` sets `ADB_LIBUSB=0` for
-  the service; check that it is in effect with `adb server-status` (should say
-  `usb_backend: NATIVE`). Details in
+  the service; check that it is in effect with `ADB_LIBUSB=0 adb server-status`
+  (should say `usb_backend: NATIVE`). Details in
   [docs/server-setup.md](docs/server-setup.md#troubleshooting).
 - **`unauthorized` in `adb devices`:** confirm the "Allow USB debugging"
   prompt on the phone and tick "Always allow".
+- **The install test message does not arrive:** open the chat with your bot
+  and press Start, then run `install.sh` again.
 - More in [docs/android-setup.md](docs/android-setup.md#troubleshooting) and
   [docs/server-setup.md](docs/server-setup.md#troubleshooting).
 

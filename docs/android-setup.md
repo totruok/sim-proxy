@@ -169,6 +169,16 @@ adb shell cmd role get-role-holders android.app.role.SMS
 # com.google.android.apps.messaging
 ```
 
+### RCS chats off
+
+Turn off RCS in Google Messages: Settings → RCS chats (called "Chat
+features" in older versions) → off. sim-proxy reads the phone's SMS store.
+RCS messages are kept inside Google Messages and never reach it, and neither
+do MMS. Codes from banks and services are plain SMS and arrive either way,
+but a message from a person whose phone supports RCS would silently go
+missing. With RCS on, `/sms` to such a person may also go out as RCS and is
+then reported as not confirmed.
+
 ### No screen lock and no SIM PIN
 
 Each of them stops the phone from recovering on its own:

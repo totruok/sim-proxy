@@ -7,44 +7,66 @@ instructions are in [android-setup.md](android-setup.md) and
 ## Main loop
 
 ```
-while running:
-    process_commands(timeout=POLL_INTERVAL)   # Telegram long poll, doubles as the sleep
-    if now < next_device_check: continue
-    if phone connected: poll SMS and missed calls
-    else: alert once, check again in 60 s
+while True:
+    long-poll Telegram until the next phone check is due, handle commands
+    if Telegram failed: pause (up to POLL_INTERVAL) instead of spinning
+    send queued notices
+    every POLL_INTERVAL: check the phone, forward new SMS and missed calls
 ```
 
-`getUpdates` is called with `timeout=POLL_INTERVAL`: a command is handled as
-soon as it arrives, and when nothing arrives the call returns after
-`POLL_INTERVAL` seconds and the phone is polled. So an incoming SMS reaches
-Telegram within about `POLL_INTERVAL` seconds plus a second or two of ADB.
+`getUpdates` waits for commands until the next phone check is due, so a
+command is handled as soon as it arrives and the phone is still checked
+every `POLL_INTERVAL` seconds, however many messages reach the bot. `/sms`
+and `/ussd` wait up to 30 seconds for a result and keep checking the phone
+while they wait. An SMS
+gets to Telegram within about `POLL_INTERVAL` seconds plus a couple of
+seconds of ADB.
+
+## Reading the phone safely
+
+`content query` prints rows as `Row: N col=value, col=value` and does not
+escape values. An SMS body can therefore contain text that looks like
+another column or another row. sim-proxy never parses a body next to other
+columns it relies on:
+
+1. It lists matching rows with only digit columns:
+   `--projection _id:date --where "<condition>"`. Any line that is not
+   exactly `Row: N _id=<digits>, date=<digits>` is an error.
+2. It reads each row on its own (`--where "_id=<id>"`) with the one
+   free-text column last (`body` for SMS, `number` for calls) and takes
+   everything after `body=` as the body, newlines included.
+
+Sorting and filtering happen in the `--where` clause or in Python.
 
 ## Delivery and state
 
-- SMS: `adb shell su -c 'content query --uri content://sms/inbox'`.
-- Calls: `content://call_log/calls`; `type=3` is a missed call
-  (1 incoming, 2 outgoing).
-- The last forwarded ids are stored in `~/.sim-proxy/last_sms_id` and
-  `~/.sim-proxy/last_call_id`, written atomically (temp file and rename).
-- Each new row is sent to Telegram first, and only then is its id written.
-  If sending fails, the loop stops and the same rows are retried on the next
-  poll. A crash or outage can therefore delay a message or, in a rare race,
-  send it twice, but it does not drop it while the phone still has it.
-- If a state file is missing at start, it is initialised with the current
-  newest id, so a fresh install does not replay the whole inbox.
-
-## Parsing `content query`
-
-The output looks like `Row: N key=value, key=value, ...`.
-
-- **Multi-line SMS:** the body can contain newlines. Lines that do not start
-  with `Row: N` continue the previous row and are joined before parsing.
-- **Commas in the body:** splitting on `, ` breaks on ordinary text. Instead
-  the parser finds every `key=` with `(?:^|, )([a-zA-Z_]\w*)=` and takes the
-  values between them.
-- `date` is a Unix timestamp in **milliseconds**.
-- Sorting is done in Python: `--sort` on the device does not survive the
-  layers of shell quoting.
+- SMS come from `content://sms/inbox`; missed calls from
+  `content://call_log/calls` with `type=3`.
+- `~/.sim-proxy/state.json` holds, for SMS and for calls, the highest `_id`
+  and the highest `date` forwarded so far. It is written atomically (temp
+  file, fsync, rename).
+- A row is new if its `_id` **or** its `date` is above the mark. The `_id`
+  alone is not enough: a replaced or wiped phone starts again from `_id` 1,
+  and SQLite hands the highest `_id` out again after that row is deleted
+  (for example when Messages deletes old one-time codes).
+- Each new row is sent to Telegram first, and only then is the mark moved
+  past it. If sending fails, the same row is tried again on the next poll. A
+  crash at the wrong moment can send a message twice, but never drops it
+  while the phone still has it.
+- Messages longer than Telegram's limit are split. If Telegram refuses a
+  message outright (HTTP 400), a short notice is sent instead and the mark
+  moves on, so one bad message cannot hold back everything after it. A
+  refusal about the chat itself ("chat not found", missing rights), or one
+  that hits the notice as well, keeps the message for another try.
+- A query that prints nothing at all is treated as a failure, not as "no
+  messages": the `content` tool reports provider errors only on stderr.
+- SMS and missed calls are set up, saved and polled separately, so a call
+  log that cannot be read never holds back SMS.
+- With no state yet, everything already on the phone counts as forwarded,
+  so a fresh install does not replay the inbox. If the phone cannot be read
+  at that moment, nothing is recorded and it is tried again later. The
+  single-number files of older versions (`last_sms_id`, `last_call_id`) are
+  imported once and renamed to `*.imported`.
 
 ## Sending SMS
 
@@ -58,10 +80,10 @@ am startservice -a android.intent.action.RESPOND_VIA_MESSAGE \
   -n com.google.android.apps.messaging/.shared.NoConfirmationSmsSendService
 ```
 
-This is why Google Messages has to be the default SMS app. At start
-sim-proxy pushes this as a small helper script to
-`/data/local/tmp/sim-proxy-sendsms.sh` (`$1` is the number, the rest is the
-text) and `/sms` calls the helper.
+This is why Google Messages has to be the default SMS app. After handing the
+SMS over, sim-proxy watches the system SMS store for up to 30 seconds and
+reports what happened to it: sent (`type=2`), failed (`type=5`), or still
+queued.
 
 ## Shell quoting
 
@@ -74,35 +96,60 @@ parses the result again, so arguments are not preserved as they are.
   it with `sh -c`.
 - Anything user-supplied inside `command` is quoted with `shlex.quote`. The
   SMS text is quoted this way, and the number must match `^\+?\d{3,15}$`.
-- `/ussd` codes go into an `am start` command line and are limited to
-  dial-pad characters (`0-9 * # +`).
+
+## USSD
+
+`/ussd` accepts only USSD and other MMI codes (`*...#` or `#...#`): anything
+else would be dialled as an ordinary voice call. The code is sent with an
+`android.intent.action.CALL` intent after waking the screen. The phone shows
+the operator's reply in a dialog, so sim-proxy reads the screen with
+`uiautomator dump` every few seconds until a dialog with a button appears,
+returns its text and closes it with the back key.
 
 ## Signal strength
 
-From `dumpsys telephony.registry`: find `primary=CellSignalStrength<Type>`
-(for example `CellSignalStrengthLte`), then read `rsrp=` from the matching
-`m<Type>=` section. Do not take the first `level=` in the output: it can
-belong to an inactive radio. RSRP is graded with the AOSP thresholds:
+From `dumpsys telephony.registry`: find `primary=CellSignalStrength<Type>`,
+then read `rsrp=` from the `mLte=` section (LTE) or `ssRsrp` from the `mNr=`
+section (5G). Do not take the first `level=` in the output: it can belong to
+an inactive radio. Values outside -140 to -43 dBm, such as 2147483647, mean
+"not available" and are not shown. RSRP is graded with the AOSP thresholds:
 ≥ -85 excellent, ≥ -95 good, ≥ -105 fair, ≥ -115 weak, below that very weak.
 
 ## SIM number
 
-Tried in order:
+Read from `content://telephony/siminfo`, from the row of the SIM that is in
+the phone now (`sim_id` 0 or above; SIMs seen before have -1). Many SIMs do
+not store their own number; the health check then says so.
 
-1. `dumpsys iphonesubinfo` (root): `Phone Number = +XXX`
-2. `content://telephony/siminfo`: the `number` column
-3. `getprop gsm.sim.operator.numeric`: only MCC/MNC, as a last resort
+## Alerts and notices
 
-Many SIMs do not store their own number, so the result can be missing.
+- **Startup:** "sim-proxy started" with a health check, or a warning that
+  the phone is not available.
+- **Phone gone:** after two checks in a row without a usable phone, one alert
+  that names the adb state (`unauthorized`, `offline`, not listed). When it
+  is back, "Phone is connected" with a new health check. A single missed
+  check is ignored, but three of them within ten minutes give one warning
+  that the USB connection is unstable. After `/reboot` an absent phone is
+  expected for four minutes and does not raise an alarm.
+- **Phone present but unreadable** (root lost, SMS store failing, a query
+  that prints nothing at all): one alert after three failed polls in a row,
+  and a message when it works again. SMS and the call log are tracked
+  separately; a call log alert says that SMS forwarding goes on, and when
+  SMS cannot be read either, the SMS alert covers both.
+- **Telegram unreachable:** single `getUpdates` failures stay in the log;
+  after 5 in a row one error goes out, and a message follows when polling
+  works again. Notices created while Telegram is down are queued and sent
+  once it is back.
+- **Stale commands:** Telegram keeps undelivered messages for 24 hours. A
+  command older than five minutes reached sim-proxy late, because it was not
+  running or could not reach Telegram; it is not executed, and the bot says
+  so.
+- **Unexpected errors** are sent to the chat, the same one at most every ten
+  minutes.
 
-## Errors and alerts
-
-- ADB cannot see the phone: one alert to Telegram with the time of the last
-  contact, then a check every 60 seconds; commands keep working meanwhile.
-  When the phone is back, a new health check is sent.
-- Everything is logged to `~/.sim-proxy/sim-proxy.log` (rotated, 5 MB × 3).
-  `ERROR` lines are also sent to the chat, through `curl` so that a broken
-  `urllib` path can still report itself.
-- Single `getUpdates` failures are normal on a flaky link and stay in the
-  log. After 5 failures in a row one error goes to the chat, and a recovery
-  message follows when polling works again.
+Everything is logged to `~/.sim-proxy/sim-proxy.log` (rotated, 5 MB × 3).
+Log lines are also printed to the console when there is one or when running
+under systemd (the journal rotates them); under launchd the console is a
+file that never rotates, so nothing is printed there. `ERROR` lines are sent
+to the chat through `curl`, so that a broken `urllib` path can still report
+itself.

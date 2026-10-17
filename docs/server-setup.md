@@ -11,8 +11,10 @@ The phone should already be prepared as described in
 **Linux (Debian, Ubuntu, Raspberry Pi OS)**
 
 ```bash
-sudo apt install adb
+sudo apt install adb fastboot
 ```
+
+`fastboot` is needed by the phone guide for unlocking and flashing.
 
 Without a udev rule Linux shows the phone as `no permissions`:
 
@@ -41,6 +43,8 @@ the prompt on the phone ("Always allow"). Check root with
 
 - **New bot:** [@BotFather](https://t.me/BotFather) → `/newbot` → copy the
   token. Get your chat id from [@userinfobot](https://t.me/userinfobot).
+- **Press Start in the chat with your new bot** (or send it `/start`). A bot
+  cannot write to you before that, and the installer's test message fails.
 - **One bot per running instance.** If two programs poll `getUpdates` with
   the same token, Telegram answers one of them with `409 Conflict` and
   updates go to whichever asked last, so commands get lost. With several
@@ -50,10 +54,8 @@ the prompt on the phone ("Always allow"). Check root with
 
 ## 3. If api.telegram.org is blocked where the server is
 
-sim-proxy talks to Telegram with `urllib` and `curl`, and both honour the
-`http_proxy` / `https_proxy` environment variables. Any local HTTP proxy that
-gets past the block will do, for example xray with an HTTP inbound on
-`127.0.0.1:10809`.
+Any local HTTP proxy that gets past the block will do, for example xray with
+an HTTP inbound on `127.0.0.1:10809`.
 
 **Before installing**, check the path by hand:
 
@@ -64,29 +66,20 @@ curl -x http://127.0.0.1:10809 "https://api.telegram.org/bot<TOKEN>/getMe"
 
 Do not go further until `getMe` works.
 
-**Linux:** add the proxy to the service with a drop-in, so it survives the
-installer rewriting the unit:
+Then put it in `.env`, on Linux and macOS alike:
 
 ```bash
-mkdir -p ~/.config/systemd/user/sim-proxy.service.d
-cat > ~/.config/systemd/user/sim-proxy.service.d/proxy.conf <<EOF
-[Service]
-Environment=HTTP_PROXY=http://127.0.0.1:10809
-Environment=HTTPS_PROXY=http://127.0.0.1:10809
-Environment=http_proxy=http://127.0.0.1:10809
-Environment=https_proxy=http://127.0.0.1:10809
-EOF
-systemctl --user daemon-reload
+TELEGRAM_PROXY=http://127.0.0.1:10809
 ```
 
-Both spellings are set because different tools look at different ones.
-
-**macOS:** after running `install.sh`, add the same variables to the
-`EnvironmentVariables` dictionary in
-`~/Library/LaunchAgents/com.sim-proxy.plist`, then unload and load the agent.
-
-Export the variables in the shell you run `install.sh` from as well: its
-test message is sent with `curl` and has to go through the proxy too.
+sim-proxy and the installer's test message both use it, and the installer
+keeps it when you run it again and overwrite `.env`. Add the line after the
+first run of the installer, or create the whole `.env` from `.env.example`
+before it. The usual `HTTPS_PROXY` / `https_proxy`
+environment variables set some other way (for example in a systemd drop-in)
+work too, but the installer deliberately does not copy proxy settings from
+your shell into the service: a proxy that only lives in your terminal would
+cut the service off from Telegram once that terminal is gone.
 
 ## 4. Install sim-proxy
 
@@ -96,18 +89,18 @@ cd sim-proxy
 ./install.sh
 ```
 
-`install.sh` checks `adb` and `python3`, asks for the token, chat id, serial
-and poll interval, writes `.env`, sends a test message to Telegram, creates
-the service (a systemd user unit on Linux, a LaunchAgent on macOS) and starts
-it. If you prefer to fill in `.env` yourself, copy `.env.example` to `.env`
-first and answer `n` when the installer asks whether to overwrite it.
+`install.sh` checks `adb`, `python3`, `curl`, the phone and root, asks for the
+token, chat id, serial and poll interval, writes `.env` (readable only by
+you, it holds the token), sends a test message to Telegram, creates the
+service (a systemd user unit on Linux, a LaunchAgent on macOS) and starts or
+restarts it. If you prefer to fill in `.env` yourself, copy `.env.example` to
+`.env` first and answer `n` when the installer asks whether to overwrite it
+(`echo n | ./install.sh` works for scripted runs).
 
 Things to know:
 
-- **Non-interactive runs:** `adb shell` inside `install.sh` reads stdin, so
-  `echo n | ./install.sh` does not work. Use `yes n | ./install.sh`.
 - **Linux:** to keep the `systemd --user` service running without an open
-  SSH session and across reboots:
+  SSH session and across reboots (the installer warns if this is off):
 
   ```bash
   sudo loginctl enable-linger $USER
@@ -122,14 +115,16 @@ Things to know:
   which makes adb use macOS's native USB stack instead of libusb. With
   libusb, the adb server crashes whenever any other USB device on the Mac
   re-enumerates, and every crash drops the connection to the phone. The
-  variable applies to the adb server that sim-proxy starts; if you start the
-  adb server yourself from a terminal first, set it there too
-  (`export ADB_LIBUSB=0`) or run `adb kill-server` and let sim-proxy start it.
+  variable applies to the adb server that sim-proxy starts, so the installer
+  stops any adb server that is already running before it starts the service.
+  If you later start the adb server yourself from a terminal, set it there
+  too (`export ADB_LIBUSB=0`) or run `adb kill-server` and let sim-proxy
+  start it.
 
 ## 5. Verify it for real
 
-1. A health check arrived in Telegram when the service started: model, SIM
-   number, battery, operator, signal.
+1. "sim-proxy started" arrived in Telegram with a health check: model, SIM
+   number, battery, operator, signal and `SMS access: ok`.
 2. `/status` to the bot gets an answer within `POLL_INTERVAL` seconds.
 3. **A real SMS over the mobile network** reaches the chat. Send one from
    another phone, or without a second phone send one to the SIM itself:
@@ -142,9 +137,14 @@ Things to know:
    journalctl --user -u sim-proxy -f      # Linux
    ```
 
-5. Reconnect test: unplug and replug the USB cable. A "phone is not
-   responding" alert should arrive, followed by a new health check once the
-   phone is back. No new USB debugging approval is needed.
+5. Reconnect test: unplug the USB cable for 30 seconds. A "Phone is not
+   responding!" alert should arrive, and "Phone is connected" with a new
+   health check once you plug it back in. The alert needs two checks in a
+   row without the phone, about `POLL_INTERVAL` seconds apart: a drop that
+   only one check sees is ignored on purpose, and one between one and two
+   intervals long may or may not be reported. If short drops keep happening
+   (3 within 10 minutes), you get one warning that the USB connection is
+   unstable. No new USB debugging approval is needed.
 
 ## 6. Remote control of phone power (Raspberry Pi)
 
@@ -175,20 +175,29 @@ register (no SIM PIN), and sim-proxy should send a health check.
 - **`unauthorized`:** the phone needs a tap on the USB debugging prompt. The
   server's key is in `~/.android/adbkey*`; a fresh adb install means a new
   key and a new prompt.
-- **SMS arrive twice or commands get lost:** two programs are polling the
-  same bot token (`409 Conflict` in the log). Find and stop the other one
-  (section 2).
-- **Health check works but `/sms` does not send:** check the SIM's credit.
-  The operator usually answers with an incoming SMS, which lands in the same
-  chat.
+- **Commands get lost, `409 Conflict` in the log:** two programs are polling
+  the same bot token. Find and stop the other one (section 2).
+- **The installer's test message fails with HTTP 403 or 400 "chat not
+  found":** you have not pressed Start in the chat with the bot yet, or the
+  chat id is wrong.
+- **`/sms` reports that sending failed:** check the SIM's credit. The
+  operator usually answers with an incoming SMS, which lands in the same
+  chat. If it says the SMS was not confirmed, check that Google Messages is
+  the default SMS app and that RCS chats are off (see the phone guide).
 - **macOS: `protocol fault (couldn't read status)`, empty `ADB error`
   messages, `daemon not running; starting now`:** the adb server is
-  crashing. Run `adb server-status`: it should say `usb_backend: NATIVE`. If
-  it says `LIBUSB`, an adb server was started without `ADB_LIBUSB=0`; run
-  `adb kill-server` and restart sim-proxy. Crash reports are in
+  crashing. Run `ADB_LIBUSB=0 adb server-status` (without the variable the
+  command itself may start a libusb server): it should say
+  `usb_backend: NATIVE`. If it says `LIBUSB`, an adb server was started
+  without `ADB_LIBUSB=0`; run `adb kill-server` and restart sim-proxy. Crash reports are in
   `~/Library/Logs/DiagnosticReports/adb-*.ips`.
-- **"Phone is not responding" and it does not come back:** check the cable
-  and the port, then cycle USB power with `uhubctl` (section 6).
+- **"Phone is not responding" and it does not come back:** the alert names
+  the adb state. `unauthorized` needs a tap on the phone; otherwise check the
+  cable and the port, then cycle USB power with `uhubctl` (section 6).
+- **"Cannot read SMS on the phone":** adb sees the phone but `su` or the SMS
+  store fails, usually because root was lost after a system update (see the
+  phone guide's troubleshooting). "Cannot read the call log" means only
+  missed calls are affected; SMS forwarding goes on.
 - **After a server reboot the bot is silent:** on Linux,
   `loginctl enable-linger` is missing; on macOS, nobody is logged in
   (section 4).
