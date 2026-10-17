@@ -298,12 +298,12 @@ def get_telegram_updates(timeout=0):
         with urllib.request.urlopen(req, timeout=timeout + 10) as resp:
             data = json.loads(resp.read())
         if not data.get("ok"):
-            # API-level rejection (e.g. bad token) — count it as a failure.
+            # API-level rejection (e.g. bad token): count it as a failure.
             raise RuntimeError(data.get("description", "getUpdates returned ok=false"))
         if telegram_poll_failures >= TELEGRAM_FAIL_THRESHOLD:
             telegram_send_safe(
-                "✅ sim-proxy: связь с Telegram восстановлена "
-                f"(после {telegram_poll_failures} неудачных опросов)"
+                "✅ sim-proxy: Telegram connection restored "
+                f"(after {telegram_poll_failures} failed polls)"
             )
         telegram_poll_failures = 0
         updates = data.get("result", [])
@@ -314,7 +314,7 @@ def get_telegram_updates(timeout=0):
         telegram_poll_failures += 1
         if telegram_poll_failures < TELEGRAM_FAIL_THRESHOLD:
             # A single blip is the normal long-poll outcome on a flaky link.
-            # Keep it in the log file only — never spam the chat for these.
+            # Keep it in the log file only, never spam the chat for these.
             benign = isinstance(e, (socket.timeout, TimeoutError)) or (
                 isinstance(e, urllib.error.URLError)
                 and isinstance(getattr(e, "reason", None), (socket.timeout, TimeoutError))
@@ -326,7 +326,7 @@ def get_telegram_updates(timeout=0):
         elif telegram_poll_failures == TELEGRAM_FAIL_THRESHOLD:
             # Now persistent: the bot can't receive commands. Surface it once.
             logger.error(
-                "getUpdates failing repeatedly (%d in a row) — команды недоступны: %s",
+                "getUpdates failing repeatedly (%d in a row), commands unavailable: %s",
                 telegram_poll_failures, e,
             )
         else:
@@ -356,7 +356,7 @@ def process_commands(timeout=0):
             handle_command(cmd, args)
         except Exception as e:
             logger.exception("Command handler error: %s", e)
-            telegram_send_safe(f"Ошибка: {e}")
+            telegram_send_safe(f"Error: {e}")
 
 
 def handle_command(cmd, args):
@@ -373,7 +373,7 @@ def handle_command(cmd, args):
     if handler:
         handler()
     else:
-        send_telegram(f"Неизвестная команда: {cmd}\nИспользуй /help")
+        send_telegram(f"Unknown command: {cmd}\nSee /help")
 
 
 # ---------------------------------------------------------------------------
@@ -394,10 +394,10 @@ def format_uptime():
     hours = (elapsed % 86400) // 3600
     mins = (elapsed % 3600) // 60
     if days > 0:
-        return f"{days}д {hours}ч"
+        return f"{days}d {hours}h"
     if hours > 0:
-        return f"{hours}ч {mins}м"
-    return f"{mins}м"
+        return f"{hours}h {mins}m"
+    return f"{mins}m"
 
 
 def format_sms(record):
@@ -405,14 +405,14 @@ def format_sms(record):
     body = record.get("body", "")
     date = record.get("date", "0")
     ts = format_timestamp(date)
-    return f"\U0001f4e9 SMS от {address}\n{body}\n\U0001f550 {ts}"
+    return f"\U0001f4e9 SMS from {address}\n{body}\n\U0001f550 {ts}"
 
 
 def format_missed_call(record):
     number = record.get("number", "unknown")
     date = record.get("date", "0")
     ts = format_timestamp(date)
-    return f"\U0001f4de Пропущенный звонок от {number}\n\U0001f550 {ts}"
+    return f"\U0001f4de Missed call from {number}\n\U0001f550 {ts}"
 
 
 # ---------------------------------------------------------------------------
@@ -449,15 +449,15 @@ def get_device_info():
             if rm:
                 rsrp = int(rm.group(1))
                 if rsrp >= -85:
-                    quality = "отличный"
+                    quality = "excellent"
                 elif rsrp >= -95:
-                    quality = "хороший"
+                    quality = "good"
                 elif rsrp >= -105:
-                    quality = "нормальный"
+                    quality = "fair"
                 elif rsrp >= -115:
-                    quality = "слабый"
+                    quality = "weak"
                 else:
-                    quality = "очень слабый"
+                    quality = "very weak"
                 info["signal_level"] = f"{rsrp} dBm, {quality}"
             else:
                 info["signal_level"] = None
@@ -504,12 +504,12 @@ def send_health_check():
     if info.get("signal_level") is not None:
         sig += f" ({info['signal_level']})"
     text = (
-        "\u2705 sim-proxy запущен\n"
-        f"\U0001f4f1 Устройство: {info['model']}\n"
-        f"\U0001f4de Номер: {number}\n"
-        f"\U0001f50b Батарея: {info['battery']}%\n"
-        f"\U0001f4f6 Оператор: {info['operator']}\n"
-        f"\U0001f4e1 Сигнал: {sig}"
+        "\u2705 sim-proxy started\n"
+        f"\U0001f4f1 Device: {info['model']}\n"
+        f"\U0001f4de Number: {number}\n"
+        f"\U0001f50b Battery: {info['battery']}%\n"
+        f"\U0001f4f6 Operator: {info['operator']}\n"
+        f"\U0001f4e1 Signal: {sig}"
     )
     telegram_send_safe(text)
     logger.info("Health check sent")
@@ -521,7 +521,7 @@ def send_health_check():
 
 def handle_status():
     if not check_device_connected():
-        send_telegram("\u26a0\ufe0f Телефон не подключён")
+        send_telegram("\u26a0\ufe0f Phone not connected")
         return
     info = get_device_info()
     number = get_sim_number()
@@ -530,12 +530,12 @@ def handle_status():
     if info.get("signal_level") is not None:
         sig += f" ({info['signal_level']})"
     text = (
-        f"\U0001f4ca Статус\n"
+        f"\U0001f4ca Status\n"
         f"\U0001f4f1 {info['model']}\n"
-        f"\U0001f4de Номер: {number}\n"
-        f"\U0001f50b Батарея: {info['battery']}%\n"
-        f"\U0001f4f6 Оператор: {info['operator']}\n"
-        f"\U0001f4e1 Сигнал: {sig}\n"
+        f"\U0001f4de Number: {number}\n"
+        f"\U0001f50b Battery: {info['battery']}%\n"
+        f"\U0001f4f6 Operator: {info['operator']}\n"
+        f"\U0001f4e1 Signal: {sig}\n"
         f"\u23f1 Uptime: {uptime}"
     )
     send_telegram(text)
@@ -572,48 +572,48 @@ def ensure_sms_helper():
 
 def handle_sms(args):
     if not check_device_connected():
-        send_telegram("\u26a0\ufe0f Телефон не подключён")
+        send_telegram("\u26a0\ufe0f Phone not connected")
         return
     parts = args.split(maxsplit=1)
     if len(parts) < 2:
-        send_telegram("Формат: /sms +7XXXXXXXXXX текст сообщения")
+        send_telegram("Usage: /sms +447700900123 message text")
         return
     number, text = parts
     if not PHONE_NUMBER_RE.match(number):
-        send_telegram("Номер: только цифры, можно с + в начале")
+        send_telegram("Number: digits only, optionally starting with +")
         return
     try:
         result = adb_shell(
             f"{SMS_HELPER} {shlex.quote(number)} {shlex.quote(text)}"
         )
         if "error" in result.lower():
-            send_telegram(f"\u274c Ошибка отправки: {result.strip()}")
+            send_telegram(f"\u274c Send failed: {result.strip()}")
         else:
-            send_telegram(f"\u2705 SMS отправлено на {number}")
+            send_telegram(f"\u2705 SMS sent to {number}")
     except Exception as e:
-        send_telegram(f"\u274c Ошибка отправки SMS: {e}")
+        send_telegram(f"\u274c SMS send error: {e}")
 
 
 def handle_reboot():
     if not check_device_connected():
-        send_telegram("\u26a0\ufe0f Телефон не подключён")
+        send_telegram("\u26a0\ufe0f Phone not connected")
         return
-    send_telegram("\U0001f504 Перезагрузка телефона...")
+    send_telegram("\U0001f504 Rebooting the phone...")
     try:
         adb_cmd(["reboot"])
     except Exception as e:
-        send_telegram(f"\u274c Ошибка: {e}")
+        send_telegram(f"\u274c Error: {e}")
 
 
 def handle_ussd(code):
     if not check_device_connected():
-        send_telegram("\u26a0\ufe0f Телефон не подключён")
+        send_telegram("\u26a0\ufe0f Phone not connected")
         return
     code = code.strip()
     # The code ends up in a device shell command line: allow dial-pad
     # characters only.
     if not USSD_CODE_RE.match(code):
-        send_telegram("Формат: /ussd *100#")
+        send_telegram("Usage: /ussd *100#")
         return
     try:
         # Clear logcat before sending
@@ -625,7 +625,7 @@ def handle_ussd(code):
             "-a", "android.intent.action.CALL",
             "-d", f"tel:{encoded}",
         ])
-        send_telegram(f"\U0001f4e1 USSD {code} отправлен, жду ответ...")
+        send_telegram(f"\U0001f4e1 USSD {code} sent, waiting for the reply...")
         time.sleep(7)
         # Try to capture response from logcat
         output = adb_cmd(["logcat", "-d", "-t", "100"])
@@ -641,19 +641,19 @@ def handle_ussd(code):
                     response = m.group(1).strip()
                     break
         if response:
-            send_telegram(f"\U0001f4e1 USSD ответ:\n{response}")
+            send_telegram(f"\U0001f4e1 USSD reply:\n{response}")
         else:
             send_telegram(
-                "\u26a0\ufe0f Не удалось захватить ответ USSD автоматически.\n"
-                "Проверь экран телефона."
+                "\u26a0\ufe0f Could not capture the USSD reply automatically.\n"
+                "Check the phone screen."
             )
     except Exception as e:
-        send_telegram(f"\u274c Ошибка USSD: {e}")
+        send_telegram(f"\u274c USSD error: {e}")
 
 
 def handle_calls(args):
     if not check_device_connected():
-        send_telegram("\u26a0\ufe0f Телефон не подключён")
+        send_telegram("\u26a0\ufe0f Phone not connected")
         return
     n = 5
     args = args.strip()
@@ -664,28 +664,28 @@ def handle_calls(args):
         rows.sort(key=lambda r: int(r.get("_id", 0)), reverse=True)
         rows = rows[:n]
         if not rows:
-            send_telegram("Журнал звонков пуст")
+            send_telegram("Call log is empty")
             return
         call_types = {
-            "1": "\U0001f4f2 Входящий",
-            "2": "\U0001f4f1 Исходящий",
-            "3": "\U0001f4f5 Пропущенный",
+            "1": "\U0001f4f2 Incoming",
+            "2": "\U0001f4f1 Outgoing",
+            "3": "\U0001f4f5 Missed",
         }
-        lines = [f"\U0001f4de Последние {len(rows)} звонков:"]
+        lines = [f"\U0001f4de Last {len(rows)} calls:"]
         for r in rows:
             ct = call_types.get(r.get("type", ""), f"? ({r.get('type', '?')})")
             number = r.get("number", "?")
             ts = format_timestamp(r.get("date", "0"))
             duration = r.get("duration", "0")
-            lines.append(f"\n{ct} {number}\n\U0001f550 {ts} ({duration}с)")
+            lines.append(f"\n{ct} {number}\n\U0001f550 {ts} ({duration}s)")
         send_telegram("\n".join(lines))
     except Exception as e:
-        send_telegram(f"\u274c Ошибка: {e}")
+        send_telegram(f"\u274c Error: {e}")
 
 
 def handle_inbox(args):
     if not check_device_connected():
-        send_telegram("\u26a0\ufe0f Телефон не подключён")
+        send_telegram("\u26a0\ufe0f Phone not connected")
         return
     n = 5
     args = args.strip()
@@ -696,9 +696,9 @@ def handle_inbox(args):
         rows.sort(key=lambda r: int(r.get("_id", 0)), reverse=True)
         rows = rows[:n]
         if not rows:
-            send_telegram("Входящие пусто")
+            send_telegram("Inbox is empty")
             return
-        lines = [f"\U0001f4e9 Последние {len(rows)} SMS:"]
+        lines = [f"\U0001f4e9 Last {len(rows)} SMS:"]
         for r in rows:
             address = r.get("address", "?")
             body = r.get("body", "")
@@ -706,18 +706,18 @@ def handle_inbox(args):
             lines.append(f"\n{address} ({ts}):\n{body}")
         send_telegram("\n".join(lines))
     except Exception as e:
-        send_telegram(f"\u274c Ошибка: {e}")
+        send_telegram(f"\u274c Error: {e}")
 
 
 def handle_help():
     send_telegram(
-        "\U0001f4cb Команды:\n"
-        "/status — статус телефона\n"
-        "/sms +7XXX текст — отправить SMS\n"
-        "/inbox [N] — последние N SMS (по умолчанию 5)\n"
-        "/calls [N] — последние N звонков (по умолчанию 5)\n"
-        "/ussd *100# — USSD запрос\n"
-        "/reboot — перезагрузить телефон"
+        "\U0001f4cb Commands:\n"
+        "/status - phone status\n"
+        "/sms +447700900123 text - send an SMS\n"
+        "/inbox [N] - last N SMS (default 5)\n"
+        "/calls [N] - last N calls (default 5)\n"
+        "/ussd *100# - USSD request\n"
+        "/reboot - reboot the phone"
     )
 
 
@@ -821,8 +821,8 @@ def main_loop():
                 logger.warning("Device disconnected")
                 ts = datetime.fromtimestamp(last_contact_time).strftime("%Y-%m-%d %H:%M")
                 alert = (
-                    "\U0001f6a8 Телефон не отвечает!\n"
-                    f"Последний контакт: {ts}"
+                    "\U0001f6a8 Phone is not responding!\n"
+                    f"Last contact: {ts}"
                 )
                 telegram_send_safe(alert)
                 device_connected = False

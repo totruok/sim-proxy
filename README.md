@@ -47,8 +47,6 @@ More detail: [docs/how-it-works.md](docs/how-it-works.md).
   restarts on failure
 - Python standard library only, no dependencies
 
-The bot's own messages are in Russian for now.
-
 ## Telegram commands
 
 | Command | What it does |
