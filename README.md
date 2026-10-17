@@ -14,11 +14,12 @@ only know that number.
 
 ## How it works
 
-```
- SIM ─▶ Android phone ──USB (adb)──▶ server running ──HTTPS──▶ Telegram ──▶ your chat
-        rooted, Magisk               sim_proxy.py              Bot API
-                        ◀──────────── /sms, /status, /inbox ... ◀──────────────
-```
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/images/how-it-works-tall-dark.svg">
+  <source media="(max-width: 600px)" srcset="docs/images/how-it-works-tall-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/how-it-works-wide-dark.svg">
+  <img alt="SMS and missed calls go from the Android phone over USB to the server running sim_proxy.py, then over HTTPS to the Telegram Bot API and your chat. Commands such as /sms, /status and /inbox travel back the same way." src="docs/images/how-it-works-wide-light.svg">
+</picture>
 
 - Every `POLL_INTERVAL` seconds sim-proxy reads the SMS inbox and the call
   log with `adb shell su -c 'content query ...'`.

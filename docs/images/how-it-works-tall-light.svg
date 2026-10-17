@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="440" height="743" viewBox="0 0 440 743" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
+<title id="title">How sim-proxy works</title>
+<desc id="desc">SMS and missed calls go from the Android phone over USB to the server running sim_proxy.py, then over HTTPS to the Telegram Bot API and your chat. Commands such as /sms, /status and /inbox travel back the same way.</desc>
+<defs>
+<marker id="arrow-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#0969da"/></marker>
+<marker id="arrow-cmd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#bc4c00"/></marker>
+</defs>
+<rect x="20" y="12" width="400" height="92" rx="12" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+<text x="220.0" y="41.9" text-anchor="middle" font-size="21" font-weight="600" fill="#1f2328">Android phone</text>
+<text x="220.0" y="66.3" text-anchor="middle" font-size="16" fill="#59636e">with the SIM inside</text>
+<text x="220.0" y="88.7" text-anchor="middle" font-size="16" fill="#59636e">rooted with Magisk</text>
+<rect x="20" y="178" width="400" height="92" rx="12" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+<text x="220.0" y="207.9" text-anchor="middle" font-size="21" font-weight="600" fill="#1f2328">Server</text>
+<text x="220.0" y="232.3" text-anchor="middle" font-size="16" fill="#59636e">Raspberry Pi, Linux or Mac</text>
+<text x="220.0" y="254.7" text-anchor="middle" font-size="16" fill="#59636e">runs sim_proxy.py</text>
+<rect x="20" y="344" width="400" height="92" rx="12" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+<text x="220.0" y="385.1" text-anchor="middle" font-size="21" font-weight="600" fill="#1f2328">Telegram</text>
+<text x="220.0" y="409.5" text-anchor="middle" font-size="16" fill="#59636e">Bot API</text>
+<rect x="20" y="510" width="400" height="92" rx="12" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+<text x="220.0" y="539.9" text-anchor="middle" font-size="21" font-weight="600" fill="#1f2328">Your chat</text>
+<text x="220.0" y="564.3" text-anchor="middle" font-size="16" fill="#59636e">Telegram app</text>
+<text x="220.0" y="586.7" text-anchor="middle" font-size="16" fill="#59636e">on any device</text>
+<line x1="198.0" y1="110" x2="198.0" y2="172" stroke="#0969da" stroke-width="2.5" stroke-linecap="round" marker-end="url(#arrow-data)"/>
+<line x1="242.0" y1="172" x2="242.0" y2="110" stroke="#bc4c00" stroke-width="2.5" stroke-linecap="round" marker-end="url(#arrow-cmd)"/>
+<text x="258.0" y="146.0" font-size="15" fill="#59636e">USB · adb</text>
+<line x1="198.0" y1="276" x2="198.0" y2="338" stroke="#0969da" stroke-width="2.5" stroke-linecap="round" marker-end="url(#arrow-data)"/>
+<line x1="242.0" y1="338" x2="242.0" y2="276" stroke="#bc4c00" stroke-width="2.5" stroke-linecap="round" marker-end="url(#arrow-cmd)"/>
+<text x="258.0" y="312.0" font-size="15" fill="#59636e">HTTPS</text>
+<line x1="198.0" y1="442" x2="198.0" y2="504" stroke="#0969da" stroke-width="2.5" stroke-linecap="round" marker-end="url(#arrow-data)"/>
+<line x1="242.0" y1="504" x2="242.0" y2="442" stroke="#bc4c00" stroke-width="2.5" stroke-linecap="round" marker-end="url(#arrow-cmd)"/>
+<line x1="22" y1="646" x2="62" y2="646" stroke="#0969da" stroke-width="2.5" stroke-linecap="round" marker-end="url(#arrow-data)"/>
+<text x="76" y="651.6" font-size="16" fill="#1f2328">SMS and missed calls, forwarded within seconds</text>
+<line x1="62" y1="682.0" x2="22" y2="682.0" stroke="#bc4c00" stroke-width="2.5" stroke-linecap="round" marker-end="url(#arrow-cmd)"/>
+<text x="76" y="687.6" font-size="16" fill="#1f2328">Commands from your chat:</text>
+<text x="76" y="709.2" font-size="16" fill="#1f2328">/status, /sms, /inbox, /calls, /ussd, /reboot</text>
+</svg>
