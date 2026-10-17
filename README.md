@@ -63,9 +63,13 @@ More detail: [docs/how-it-works.md](docs/how-it-works.md).
 ## Requirements
 
 **Phone**
-- Android phone with an unlockable bootloader, rooted with
-  [Magisk](https://github.com/topjohnwu/Magisk). Tested on a Pixel 6a with
-  Android 16.
+- **A Google Pixel is recommended** (6a or newer, second-hand is fine).
+  sim-proxy is tested on a Pixel 6a with Android 16. Google allows unlocking
+  the bootloader officially and publishes factory images, which makes root
+  straightforward. Other phones work if their bootloader can be unlocked, but
+  some setup steps are Pixel-specific; the
+  [phone guide](docs/android-setup.md) marks them.
+- Root with [Magisk](https://github.com/topjohnwu/Magisk).
 - Google Messages as the default SMS app (only needed for `/sms`).
 - A data-capable USB cable.
 

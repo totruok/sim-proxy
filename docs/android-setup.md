@@ -19,10 +19,14 @@ into. Install `adb` there first: [server-setup.md](server-setup.md#1-adb-on-the-
 | The SIM whose SMS you want to receive | Receives SMS and calls |
 | USB-C cable that carries data, not just power | Connects the phone to the server |
 
-Why a Pixel: Google allows unlocking the bootloader officially, root with
-Magisk is simple and well documented, and factory images are public. Other
-phones work if their bootloader can be unlocked. Carrier-locked Pixels (for
-example US Verizon models) usually cannot be unlocked: check before buying.
+**A Pixel is recommended.** Google allows unlocking the bootloader
+officially, root with Magisk is simple and well documented, and factory
+images are public. Carrier-locked Pixels (for example US Verizon models)
+usually cannot be unlocked: check before buying.
+
+Other phones work if their bootloader can be unlocked, but some steps below
+are written for Pixels and use Google's tools or Pixel firmware. They are
+marked **Pixel-specific**, each with a note on what to do on other phones.
 
 ## 1. First boot
 
@@ -57,6 +61,11 @@ fastboot flashing unlock
 # on the phone: volume keys to "Unlock the bootloader", then the power key
 ```
 
+> **Pixel-specific.** This is how Pixels are unlocked. Other manufacturers
+> have their own procedure (Xiaomi, for example, requires its own unlock tool
+> and a waiting period), and some phones cannot be unlocked at all. Find out
+> how it works for your model before you buy.
+
 After the wipe, go through the setup again (still without a Google
 account), connect Wi-Fi, enable Developer options and USB debugging, and
 accept "Always allow" again.
@@ -74,6 +83,10 @@ extra app has to run on the phone.
    `image-*.zip` inside, and take out `boot.img`.
    - Pixel 7 and newer use `init_boot.img` instead of `boot.img`. Use that
      file in the steps below and flash it with `fastboot flash init_boot ...`.
+   - **Pixel-specific.** Other manufacturers do not publish images like
+     this. Take `boot.img` (or `init_boot.img`) from the official firmware
+     for your exact build; often it has to be extracted from the
+     `payload.bin` inside the update package.
 2. Install Magisk: download the APK from
    <https://github.com/topjohnwu/Magisk/releases> and run
    `adb install Magisk-vXX.X.apk`.
@@ -128,6 +141,10 @@ fastboot reboot
 
 As a second layer you can add the Magisk module
 [Magisk-Autoboot](https://github.com/anasfanani/Magisk-Autoboot).
+
+> **Pixel-specific.** Pixels have `fastboot oem off-mode-charge`; many other
+> phones do not and reject the command. On those, use the Magisk-Autoboot
+> module as the main method and run the test below.
 
 **What it reacts to:** `off-mode-charge 0` fires when power is *applied* to a
 phone that is off. If you shut the phone down while the cable is already
@@ -191,6 +208,10 @@ adb shell su -c "cat /sys/devices/platform/google,charger/charge_stop_level"
 The limiter does not drain the battery: above 80% it simply stops charging
 (status "not charging") and waits for the level to drop by itself (about 1%
 per hour). After that the phone stays between 77% and 80%.
+
+> **Pixel-specific.** Both the setting and the file path are Pixel ones.
+> Other phones may have a similar option under another name (Samsung calls it
+> Protect battery) or none at all.
 
 ### Complete silence
 
