@@ -104,6 +104,11 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     <dict>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <!-- Native IOKit USB backend: the default libusb backend segfaults
+             in its hotplug thread when any other USB device re-enumerates
+             (seen 2026-10 with a flapping ASMedia controller). -->
+        <key>ADB_LIBUSB</key>
+        <string>0</string>
     </dict>
 </dict>
 </plist>

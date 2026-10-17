@@ -4,6 +4,7 @@
 import json
 import logging
 import re
+import shlex
 import signal
 import socket
 import subprocess
@@ -122,7 +123,10 @@ def adb_cmd(args, timeout=30):
 
 
 def adb_shell(command):
-    return adb_cmd(["shell", "su", "-c", command])
+    # adb joins its argv with spaces and the device shell parses the result
+    # again, so pass su the whole command as a single quoted word. su then
+    # runs it with sh -c, which is where the caller's own quoting applies.
+    return adb_cmd(["shell", "su -c " + shlex.quote(command)])
 
 
 def check_device_connected():
@@ -259,7 +263,9 @@ def send_telegram_curl(text):
             timeout=15, check=False,
         )
     except Exception as e:
-        logger.error("Telegram curl fallback failed: %s", e)
+        # The exception text carries curl's argv, and the URL in it holds
+        # the bot token, so log only the error type.
+        logger.error("Telegram curl fallback failed: %s", type(e).__name__)
 
 
 def telegram_send_safe(text):
@@ -536,6 +542,8 @@ def handle_status():
 
 
 SMS_HELPER = "/data/local/tmp/sim-proxy-sendsms.sh"
+PHONE_NUMBER_RE = re.compile(r"^\+?\d{3,15}$")
+USSD_CODE_RE = re.compile(r"^[0-9*#+]{1,40}$")
 
 
 def ensure_sms_helper():
@@ -571,8 +579,13 @@ def handle_sms(args):
         send_telegram("Формат: /sms +7XXXXXXXXXX текст сообщения")
         return
     number, text = parts
+    if not PHONE_NUMBER_RE.match(number):
+        send_telegram("Номер: только цифры, можно с + в начале")
+        return
     try:
-        result = adb_shell(f"{SMS_HELPER} {number} {text}")
+        result = adb_shell(
+            f"{SMS_HELPER} {shlex.quote(number)} {shlex.quote(text)}"
+        )
         if "error" in result.lower():
             send_telegram(f"\u274c Ошибка отправки: {result.strip()}")
         else:
@@ -597,7 +610,9 @@ def handle_ussd(code):
         send_telegram("\u26a0\ufe0f Телефон не подключён")
         return
     code = code.strip()
-    if not code:
+    # The code ends up in a device shell command line: allow dial-pad
+    # characters only.
+    if not USSD_CODE_RE.match(code):
         send_telegram("Формат: /ussd *100#")
         return
     try:
