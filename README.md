@@ -183,6 +183,17 @@ Read this before you point a SIM that receives 2FA codes at it.
 - More in [docs/android-setup.md](docs/android-setup.md#troubleshooting) and
   [docs/server-setup.md](docs/server-setup.md#troubleshooting).
 
+## Development
+
+```bash
+python3 -m unittest discover -s tests
+```
+
+The tests drive `sim_proxy.py` against a fake phone that answers like
+Android's `content` tool and a fake Telegram, so no phone, adb or network is
+needed. They take well under a second. Implementation notes are in
+[docs/how-it-works.md](docs/how-it-works.md).
+
 ## License
 
 [MIT](LICENSE)
